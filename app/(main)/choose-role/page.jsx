@@ -1,11 +1,12 @@
-"use client";
-
 import Link from "next/link";
-import {  setUserRole } from "../../../actions/user";
+import { setUserRole } from "../../../actions/user";
+import { auth } from "@clerk/nextjs/server";
 
-export default function ChooseRole() {
-
-
+export default  async function ChooseRole() {
+  const {userId} = await auth();
+  if (!userId) {
+    redirect("/sign-in");
+  }
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center text-white">
       <div className="text-center space-y-8">
