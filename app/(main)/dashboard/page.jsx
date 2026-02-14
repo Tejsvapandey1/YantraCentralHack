@@ -1,12 +1,45 @@
+import { auth } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
+import prisma from "../../../lib/prisma";
 
-import { getHealthSuggestions } from "../../../lib/gemini";
 import TestPage from "../../../lib/test";
+import { getHealthSuggestions } from "../../../lib/gemini";
 import DashboardClient from "./DashboardClient";
 
 export default async function Page() {
-  const data = await TestPage();
-//   console.log(data);
 
-  const suggestions = await getHealthSuggestions(data)
-  return <DashboardClient data={data} suggestions={suggestions}/>;
+  /* ---------- AUTH ---------- */
+  const { userId } = await auth();
+
+  if (!userId) {
+    redirect("/sign-in");
+  }
+
+  console.log(userId);
+
+  /* ---------- FIND USER ---------- */
+  const user = await prisma.user.findUnique({
+    where: { clerkId: userId }
+  });
+
+  if (!user) {
+    redirect("/choose-role");
+  }
+
+  /* ---------- ROLE CHECK ---------- */
+  if (user.role !== "ADMIN") {
+    redirect("/user?error=not-allowed");
+  }
+
+  /* ---------- ADMIN DATA ---------- */
+  const data = await TestPage();
+  const suggestions = await getHealthSuggestions(data);
+
+  return (
+    <DashboardClient
+      data={data}
+      suggestions={suggestions}
+      user={user}
+    />
+  );
 }

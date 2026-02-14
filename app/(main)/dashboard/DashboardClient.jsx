@@ -2,6 +2,9 @@
 
 import { Metric } from "../../../components/metric";
 import { Chart } from "../../../components/chart";
+import { useEffect } from "react";
+import useFetch from "../../../hooks/use-fetch";
+import { findUser } from "../../../actions/user";
 
 /* -------- HEALTH LIMITS -------- */
 
@@ -43,6 +46,23 @@ function getAlerts(latest) {
 /* -------- MAIN DASHBOARD -------- */
 
 export default function DashboardClient({ data, suggestions }) {
+  const { data: user, loading, fn: fetchUser } = useFetch(findUser);
+
+  useEffect(async () => {
+    await fetchUser();
+  }, []);
+
+  if (loading) return <p>Loading...</p>;
+  if (!user) return <p>User not found</p>;
+
+  if (user.role !== "ADMIN") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-950 text-red-500 text-xl">
+        ❌ You are not allowed to access admin dashboard
+      </div>
+    );
+  }
+
   if (!data.length) return <p>No data</p>;
 
   const latest = data[data.length - 1];
@@ -60,9 +80,10 @@ export default function DashboardClient({ data, suggestions }) {
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6 space-y-6">
+      <h1 className="text-3xl font-bold mb-4 text-center">Welcome Admin</h1>
       <h1 className="text-3xl font-bold">Health Monitoring</h1>
 
-      {/* -------- AI HEALTH ANALYSIS -------- */}
+     
 
       {suggestions && suggestions.trim() !== "" && (
         <div className="bg-indigo-900/40 border border-indigo-500 p-5 rounded-xl">
