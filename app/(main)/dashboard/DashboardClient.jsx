@@ -8,6 +8,7 @@ import { findUser } from "../../../actions/user";
 import HealthChatbot from "../../../components/health-checkbot";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { socket } from "../../../lib/socket-client";
 
 /* -------- HEALTH LIMITS -------- */
 
@@ -18,46 +19,32 @@ const LIMITS = {
   env_pressure: { min: 980, max: 1050 },
 };
 
-/* -------- ALERT CHECK -------- */
-
 function getAlerts(latest) {
   if (!latest) return [];
 
   const alerts = [];
 
-  if (
-    latest.heartrate < LIMITS.heartrate.min ||
-    latest.heartrate > LIMITS.heartrate.max
-  )
+  if (latest.heartrate < 60 || latest.heartrate > 100)
     alerts.push("Abnormal Heart Rate");
 
-  if (latest.spo2 < LIMITS.spo2.min) alerts.push("Low Oxygen Level");
+  if (latest.spo2 < 95) alerts.push("Low Oxygen Level");
 
-  if (
-    latest.bodytemp < LIMITS.bodytemp.min ||
-    latest.bodytemp > LIMITS.bodytemp.max
-  )
+  if (latest.bodytemp < 36.1 || latest.bodytemp > 37.5)
     alerts.push("Abnormal Body Temperature");
 
-  if (
-    latest.env_pressure < LIMITS.env_pressure.min ||
-    latest.env_pressure > LIMITS.env_pressure.max
-  )
+  if (latest.env_pressure < 980 || latest.env_pressure > 1050)
     alerts.push("Abnormal Pressure");
 
   return alerts;
 }
 
-/* -------- MAIN DASHBOARD -------- */
+/* ================= DASHBOARD ================= */
 
-export default function DashboardClient({ data, suggestions }) {
+export default function DashboardClient({ data = [], suggestions }) {
   const { data: user, loading, fn: fetchUser } = useFetch(findUser);
 
-  /* ---------- LIVE STATE ---------- */
-
-  const [liveData, setLiveData] = useState(data || []);
+  const [liveData, setLiveData] = useState(data);
   const [fallDetected, setFallDetected] = useState(false);
-
   const alarmRef = useRef(null);
 
   /* ---------- FETCH USER ---------- */
@@ -66,54 +53,23 @@ export default function DashboardClient({ data, suggestions }) {
     fetchUser();
   }, []);
 
-  /* ---------- POLL SENSOR DATA ---------- */
+  /* ---------- REALTIME SOCKET ---------- */
 
   useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch("/api/sensor/latest");
-        const fresh = await res.json();
-        setLiveData(fresh);
-        // console.log(fresh);
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    }, 1000);
+    socket.connect();
 
-    return () => clearInterval(interval);
-  }, []);
+    socket.on("connect", () => {
+      console.log("Socket connected:", socket.id);
+    });
 
-  /* ---------- DERIVED VALUES ---------- */
+    // receive new sensor row
+    socket.on("sensor_update", (record) => {
+      setLiveData((prev) => [...prev.slice(-100), record]);
+    });
 
-  const latest = liveData.length ? liveData[liveData.length - 1] : null;
-
-  const alerts = getAlerts(latest);
-
-  /* ---------- FALL DETECTION ---------- */
-
-  const fallTimerRef = useRef(null);
-const activeFallRecordRef = useRef(null);
-
-useEffect(() => {
-  if (!latest) return;
-
-  const recordId = latest.id; // important unique identifier
-  const isFall = Boolean(latest.fall_detected);
-
-  console.log("Latest record:", recordId, "Fall:", isFall);
-
-  /* ---------- FALL STARTED ---------- */
-  if (isFall && activeFallRecordRef.current !== recordId) {
-    console.log("New fall event detected");
-
-    activeFallRecordRef.current = recordId;
-
-    if (fallTimerRef.current) {
-      clearTimeout(fallTimerRef.current);
-    }
-
-    fallTimerRef.current = setTimeout(() => {
-      console.log("🚨 FALL CONFIRMED");
+    // receive fall alert
+    socket.on("fall_alert", (record) => {
+      setLiveData((prev) => [...prev.slice(-100), record]);
 
       setFallDetected(true);
 
@@ -121,41 +77,34 @@ useEffect(() => {
         alarmRef.current.currentTime = 0;
         alarmRef.current.play().catch(() => {});
       }
-    }, 5000); // or 60000
-  }
+    });
 
-  /* ---------- FALL STOPPED ---------- */
-  if (!isFall) {
-    console.log("Fall stopped");
+    return () => {
+      socket.off("sensor_update");
+      socket.off("fall_alert");
+      socket.disconnect();
+    };
+  }, []);
 
-    activeFallRecordRef.current = null;
+  /* ---------- DATA ---------- */
 
-    if (fallTimerRef.current) {
-      clearTimeout(fallTimerRef.current);
-      fallTimerRef.current = null;
-    }
-
-    setFallDetected(false);
-  }
-
-}, [latest]);
-
-  /* ---------- SAFETY RETURNS ---------- */
+  const latest = liveData.length ? liveData[liveData.length - 1] : null;
+  const alerts = getAlerts(latest);
 
   if (loading) return <p>Loading...</p>;
   if (!user) return <p>User not found</p>;
 
   if (user.role !== "ADMIN") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-950 text-red-500 text-xl">
-        ❌ You are not allowed to access admin dashboard
+      <div className="min-h-screen flex items-center justify-center bg-gray-950 text-red-500">
+        Access denied
       </div>
     );
   }
 
   if (!latest) return <p>No data</p>;
 
-  /* ---------- CHART DATA ---------- */
+  /* ---------- CHART ---------- */
 
   const chartData = liveData.map((d) => ({
     time: new Date(d.created_at).toLocaleTimeString(),
@@ -172,36 +121,39 @@ useEffect(() => {
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6 space-y-6">
       <audio ref={alarmRef} src="/alarm.mp3" preload="auto" />
 
+      {/* FALL ALERT */}
       {fallDetected && (
-        <div className="bg-red-700 border-2 border-red-400 text-white p-5 rounded-xl text-center animate-pulse shadow-2xl">
+        <div className="bg-red-700 border-2 border-red-400 p-5 rounded-xl text-center animate-pulse">
           <h2 className="text-2xl font-bold">🚨 FALL DETECTED</h2>
-          <p className="mt-2 text-lg">
-            Patient may have fallen. Immediate attention required.
+          <p>Immediate attention required</p>
+          <p className="text-sm">Device: {latest.device}</p>
+          <p className="text-sm">
+            {new Date(latest.created_at).toLocaleString()}
           </p>
-          <p className="text-sm opacity-80 mt-1">Device: {latest.device}</p>
-          <p className="text-sm opacity-80">
-            Time: {new Date(latest.created_at).toLocaleString()}
-          </p>
+
+          <button
+            onClick={() => setFallDetected(false)}
+            className="mt-4 px-4 py-2 bg-white text-red-700 rounded"
+          >
+            Acknowledge
+          </button>
         </div>
       )}
 
-      <h1 className="text-3xl font-bold text-center">Welcome CareTaker</h1>
-      <h1 className="text-3xl font-bold">Health Monitoring</h1>
+      <h1 className="text-3xl font-bold text-center">Health Monitoring</h1>
 
-      <h2 className="font-bold text-indigo-300 text-lg">
-        🤖 AI Health Insights (Last 15 Minutes)
+      <h2 className="text-indigo-300 font-bold">
+        🤖 AI Health Insights
       </h2>
 
-      <div className="max-h-[320px] overflow-y-auto pr-2 text-sm text-gray-200 leading-relaxed scrollbar-hide">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{suggestions}</ReactMarkdown>
-      </div>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {suggestions}
+      </ReactMarkdown>
 
       {alerts.length > 0 && (
         <div className="bg-red-900 border border-red-500 p-4 rounded-xl">
           <h2 className="font-bold text-red-300">⚠ Health Alert</h2>
-          {alerts.map((a, i) => (
-            <p key={i}>{a}</p>
-          ))}
+          {alerts.map((a, i) => <p key={i}>{a}</p>)}
         </div>
       )}
 
@@ -214,30 +166,10 @@ useEffect(() => {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <Chart
-          title="Heart Rate Trend"
-          data={chartData}
-          dataKey="heartrate"
-          color="#22c55e"
-        />
-        <Chart
-          title="SpO₂ Trend"
-          data={chartData}
-          dataKey="spo2"
-          color="#3b82f6"
-        />
-        <Chart
-          title="Body Temperature Trend"
-          data={chartData}
-          dataKey="temp"
-          color="#ef4444"
-        />
-        <Chart
-          title="Pressure Trend"
-          data={chartData}
-          dataKey="pressure"
-          color="#a855f7"
-        />
+        <Chart title="Heart Rate" data={chartData} dataKey="heartrate" color="#22c55e" />
+        <Chart title="SpO₂" data={chartData} dataKey="spo2" color="#3b82f6" />
+        <Chart title="Temperature" data={chartData} dataKey="temp" color="#ef4444" />
+        <Chart title="Pressure" data={chartData} dataKey="pressure" color="#a855f7" />
       </div>
 
       <HealthChatbot latestData={latest} />
