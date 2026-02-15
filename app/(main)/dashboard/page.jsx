@@ -35,6 +35,8 @@ export default async function Page() {
   const data = await TestPage();
   const suggestions = await getHealthSuggestions(data);
 
+  console.log(data[0]);
+
   return (
     <DashboardClient
       data={data}

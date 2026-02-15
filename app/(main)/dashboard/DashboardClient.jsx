@@ -2,9 +2,12 @@
 
 import { Metric } from "../../../components/metric";
 import { Chart } from "../../../components/chart";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import useFetch from "../../../hooks/use-fetch";
 import { findUser } from "../../../actions/user";
+import HealthChatbot from "../../../components/health-checkbot";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 /* -------- HEALTH LIMITS -------- */
 
@@ -18,6 +21,8 @@ const LIMITS = {
 /* -------- ALERT CHECK -------- */
 
 function getAlerts(latest) {
+  if (!latest) return [];
+
   const alerts = [];
 
   if (
@@ -48,9 +53,94 @@ function getAlerts(latest) {
 export default function DashboardClient({ data, suggestions }) {
   const { data: user, loading, fn: fetchUser } = useFetch(findUser);
 
-  useEffect(async () => {
-    await fetchUser();
+  /* ---------- LIVE STATE ---------- */
+
+  const [liveData, setLiveData] = useState(data || []);
+  const [fallDetected, setFallDetected] = useState(false);
+
+  const alarmRef = useRef(null);
+
+  /* ---------- FETCH USER ---------- */
+
+  useEffect(() => {
+    fetchUser();
   }, []);
+
+  /* ---------- POLL SENSOR DATA ---------- */
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/sensor/latest");
+        const fresh = await res.json();
+        setLiveData(fresh);
+        // console.log(fresh);
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  /* ---------- DERIVED VALUES ---------- */
+
+  const latest = liveData.length ? liveData[liveData.length - 1] : null;
+
+  const alerts = getAlerts(latest);
+
+  /* ---------- FALL DETECTION ---------- */
+
+  const fallTimerRef = useRef(null);
+const activeFallRecordRef = useRef(null);
+
+useEffect(() => {
+  if (!latest) return;
+
+  const recordId = latest.id; // important unique identifier
+  const isFall = Boolean(latest.fall_detected);
+
+  console.log("Latest record:", recordId, "Fall:", isFall);
+
+  /* ---------- FALL STARTED ---------- */
+  if (isFall && activeFallRecordRef.current !== recordId) {
+    console.log("New fall event detected");
+
+    activeFallRecordRef.current = recordId;
+
+    if (fallTimerRef.current) {
+      clearTimeout(fallTimerRef.current);
+    }
+
+    fallTimerRef.current = setTimeout(() => {
+      console.log("🚨 FALL CONFIRMED");
+
+      setFallDetected(true);
+
+      if (alarmRef.current) {
+        alarmRef.current.currentTime = 0;
+        alarmRef.current.play().catch(() => {});
+      }
+    }, 5000); // or 60000
+  }
+
+  /* ---------- FALL STOPPED ---------- */
+  if (!isFall) {
+    console.log("Fall stopped");
+
+    activeFallRecordRef.current = null;
+
+    if (fallTimerRef.current) {
+      clearTimeout(fallTimerRef.current);
+      fallTimerRef.current = null;
+    }
+
+    setFallDetected(false);
+  }
+
+}, [latest]);
+
+  /* ---------- SAFETY RETURNS ---------- */
 
   if (loading) return <p>Loading...</p>;
   if (!user) return <p>User not found</p>;
@@ -63,11 +153,11 @@ export default function DashboardClient({ data, suggestions }) {
     );
   }
 
-  if (!data.length) return <p>No data</p>;
+  if (!latest) return <p>No data</p>;
 
-  const latest = data[data.length - 1];
+  /* ---------- CHART DATA ---------- */
 
-  const chartData = data.map((d) => ({
+  const chartData = liveData.map((d) => ({
     time: new Date(d.created_at).toLocaleTimeString(),
     heartrate: d.heartrate,
     spo2: d.spo2,
@@ -76,28 +166,35 @@ export default function DashboardClient({ data, suggestions }) {
     steps: d.stepcount,
   }));
 
-  const alerts = getAlerts(latest);
+  /* ---------- UI ---------- */
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6 space-y-6">
-      <h1 className="text-3xl font-bold mb-4 text-center">Welcome Admin</h1>
-      <h1 className="text-3xl font-bold">Health Monitoring</h1>
+      <audio ref={alarmRef} src="/alarm.mp3" preload="auto" />
 
-     
-
-      {suggestions && suggestions.trim() !== "" && (
-        <div className="bg-indigo-900/40 border border-indigo-500 p-5 rounded-xl">
-          <h2 className="font-bold text-indigo-300 mb-2">
-            🤖 AI Health Insights (Last 15 Minutes)
-          </h2>
-
-          <pre className="whitespace-pre-wrap text-sm text-gray-200">
-            {suggestions}
-          </pre>
+      {fallDetected && (
+        <div className="bg-red-700 border-2 border-red-400 text-white p-5 rounded-xl text-center animate-pulse shadow-2xl">
+          <h2 className="text-2xl font-bold">🚨 FALL DETECTED</h2>
+          <p className="mt-2 text-lg">
+            Patient may have fallen. Immediate attention required.
+          </p>
+          <p className="text-sm opacity-80 mt-1">Device: {latest.device}</p>
+          <p className="text-sm opacity-80">
+            Time: {new Date(latest.created_at).toLocaleString()}
+          </p>
         </div>
       )}
 
-      {/* -------- ALERT PANEL -------- */}
+      <h1 className="text-3xl font-bold text-center">Welcome CareTaker</h1>
+      <h1 className="text-3xl font-bold">Health Monitoring</h1>
+
+      <h2 className="font-bold text-indigo-300 text-lg">
+        🤖 AI Health Insights (Last 15 Minutes)
+      </h2>
+
+      <div className="max-h-[320px] overflow-y-auto pr-2 text-sm text-gray-200 leading-relaxed scrollbar-hide">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{suggestions}</ReactMarkdown>
+      </div>
 
       {alerts.length > 0 && (
         <div className="bg-red-900 border border-red-500 p-4 rounded-xl">
@@ -108,8 +205,6 @@ export default function DashboardClient({ data, suggestions }) {
         </div>
       )}
 
-      {/* -------- METRICS -------- */}
-
       <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
         <Metric title="Heart Rate" value={`${latest.heartrate} bpm`} />
         <Metric title="SpO₂" value={`${latest.spo2}%`} />
@@ -118,10 +213,6 @@ export default function DashboardClient({ data, suggestions }) {
         <Metric title="Steps" value={latest.stepcount} />
       </div>
 
-      {/* -------- GRAPHS -------- */}
-
-      {/* -------- GRAPHS GRID -------- */}
-
       <div className="grid gap-6 md:grid-cols-2">
         <Chart
           title="Heart Rate Trend"
@@ -129,21 +220,18 @@ export default function DashboardClient({ data, suggestions }) {
           dataKey="heartrate"
           color="#22c55e"
         />
-
         <Chart
           title="SpO₂ Trend"
           data={chartData}
           dataKey="spo2"
           color="#3b82f6"
         />
-
         <Chart
           title="Body Temperature Trend"
           data={chartData}
           dataKey="temp"
           color="#ef4444"
         />
-
         <Chart
           title="Pressure Trend"
           data={chartData}
@@ -151,10 +239,8 @@ export default function DashboardClient({ data, suggestions }) {
           color="#a855f7"
         />
       </div>
+
+      <HealthChatbot latestData={latest} />
     </div>
   );
 }
-
-/* -------- METRIC CARD -------- */
-
-/* -------- CHART -------- */
