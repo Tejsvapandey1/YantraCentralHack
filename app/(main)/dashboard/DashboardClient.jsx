@@ -62,17 +62,22 @@ export default function DashboardClient({ data = [], suggestions }) {
       console.log("Socket connected:", socket.id);
     });
 
-    // receive new sensor row
+    /* ---------- LIVE SENSOR UPDATE ---------- */
     socket.on("sensor_update", (record) => {
       setLiveData((prev) => [...prev.slice(-100), record]);
     });
 
-    // receive fall alert
+    /* ---------- INSTANT FALL ALERT ---------- */
     socket.on("fall_alert", (record) => {
-      setLiveData((prev) => [...prev.slice(-100), record]);
+      console.log("🚨 FALL ALERT INSTANT");
 
+      // show alert immediately (DO NOT WAIT)
       setFallDetected(true);
 
+      // store latest fall record separately if needed
+      setLiveData((prev) => [...prev.slice(-100), record]);
+
+      // play sound instantly
       if (alarmRef.current) {
         alarmRef.current.currentTime = 0;
         alarmRef.current.play().catch(() => {});
@@ -121,15 +126,19 @@ export default function DashboardClient({ data = [], suggestions }) {
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6 space-y-6">
       <audio ref={alarmRef} src="/alarm.mp3" preload="auto" />
 
-      {/* FALL ALERT */}
       {fallDetected && (
         <div className="bg-red-700 border-2 border-red-400 p-5 rounded-xl text-center animate-pulse">
           <h2 className="text-2xl font-bold">🚨 FALL DETECTED</h2>
           <p>Immediate attention required</p>
-          <p className="text-sm">Device: {latest.device}</p>
-          <p className="text-sm">
-            {new Date(latest.created_at).toLocaleString()}
-          </p>
+
+          {latest && (
+            <>
+              <p className="text-sm">Device: {latest.device}</p>
+              <p className="text-sm">
+                {new Date(latest.created_at).toLocaleString()}
+              </p>
+            </>
+          )}
 
           <button
             onClick={() => setFallDetected(false)}
@@ -142,18 +151,16 @@ export default function DashboardClient({ data = [], suggestions }) {
 
       <h1 className="text-3xl font-bold text-center">Health Monitoring</h1>
 
-      <h2 className="text-indigo-300 font-bold">
-        🤖 AI Health Insights
-      </h2>
+      <h2 className="text-indigo-300 font-bold">🤖 AI Health Insights</h2>
 
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {suggestions}
-      </ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{suggestions}</ReactMarkdown>
 
       {alerts.length > 0 && (
         <div className="bg-red-900 border border-red-500 p-4 rounded-xl">
           <h2 className="font-bold text-red-300">⚠ Health Alert</h2>
-          {alerts.map((a, i) => <p key={i}>{a}</p>)}
+          {alerts.map((a, i) => (
+            <p key={i}>{a}</p>
+          ))}
         </div>
       )}
 
@@ -166,10 +173,25 @@ export default function DashboardClient({ data = [], suggestions }) {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <Chart title="Heart Rate" data={chartData} dataKey="heartrate" color="#22c55e" />
+        <Chart
+          title="Heart Rate"
+          data={chartData}
+          dataKey="heartrate"
+          color="#22c55e"
+        />
         <Chart title="SpO₂" data={chartData} dataKey="spo2" color="#3b82f6" />
-        <Chart title="Temperature" data={chartData} dataKey="temp" color="#ef4444" />
-        <Chart title="Pressure" data={chartData} dataKey="pressure" color="#a855f7" />
+        <Chart
+          title="Temperature"
+          data={chartData}
+          dataKey="temp"
+          color="#ef4444"
+        />
+        <Chart
+          title="Pressure"
+          data={chartData}
+          dataKey="pressure"
+          color="#a855f7"
+        />
       </div>
 
       <HealthChatbot latestData={latest} />
