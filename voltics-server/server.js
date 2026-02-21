@@ -9,6 +9,12 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 app.use(cors());
 
+const twilio = require("twilio");
+
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN,
+);
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -19,7 +25,7 @@ const io = new Server(server, {
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
 /* ---------- SOCKET ---------- */
@@ -35,19 +41,43 @@ supabase
   .on(
     "postgres_changes",
     { event: "*", schema: "public", table: "vulnerable_kit" },
-    (payload) => {
+    async (payload) => {
       const data = payload.new;
       if (!data) return;
 
-      // send live sensor data
       io.emit("sensor_update", data);
 
-      // send fall alert
       if (data.fall_detected === true) {
+        const now = Date.now();
+
+        // check cooldown
+        if (now - lastAlertTime < ALERT_COOLDOWN) {
+          console.log("⏳ Fall detected but cooldown active — SMS not sent");
+          return;
+        }
+
+        // update last alert time
+        lastAlertTime = now;
+
         console.log("🚨 FALL DETECTED");
+
         io.emit("fall_alert", data);
+
+        try {
+          await twilioClient.messages.create({
+            body: `🚨 EMERGENCY ALERT!
+Fall detected for patient.
+Immediate attention required.`,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: process.env.ALERT_PHONE_NUMBER,
+          });
+
+          console.log("✅ SMS sent");
+        } catch (err) {
+          console.error("❌ SMS failed:", err.message);
+        }
       }
-    }
+    },
   )
   .subscribe();
 
